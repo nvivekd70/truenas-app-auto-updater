@@ -41,7 +41,7 @@ done
 
 START_TIME=$(date '+%Y-%m-%d %H:%M:%S')
 
-# The normal use case is a nightly run before a maintenance reboot.  The
+# The normal use case is a nightly run before a maintenance reboot. The
 # deadline is the next occurrence of UPDATE_DEADLINE, normally tomorrow.
 DEADLINE=$(date -d "tomorrow ${UPDATE_DEADLINE}" +%s)
 
@@ -63,13 +63,26 @@ append_line() {
 send_report() {
     local subject="$1"
     local text="$2"
+    local payload
 
     if [ -z "$MAIL_TO" ]; then
         log "MAIL_TO is empty; email report not sent."
         return 0
     fi
 
-    "$MIDCLT" call mail.send "{\n      \"subject\": $(printf '%s' "$subject" | "$JQ" -Rs .),\n      \"text\": $(printf '%s' "$text" | "$JQ" -Rs .),\n      \"to\": [$(printf '%s' "$MAIL_TO" | "$JQ" -Rs .)]\n    }" >> "$LOG_FILE" 2>&1
+    # Build valid JSON with jq rather than manually escaping JSON.
+    payload=$("$JQ" -n \
+        --arg subject "$subject" \
+        --arg text "$text" \
+        --arg to "$MAIL_TO" \
+        '{subject:$subject, text:$text, to:[$to]}')
+
+    if ! "$MIDCLT" call mail.send "$payload" >> "$LOG_FILE" 2>&1; then
+        log "WARNING: mail.send failed."
+        return 1
+    fi
+
+    return 0
 }
 
 get_app_info() {
