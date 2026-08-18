@@ -13,6 +13,7 @@
 # This is a community script, not an official TrueNAS tool.
 
 set -u
+set -o pipefail
 
 # -----------------------------
 # Configuration
@@ -30,7 +31,18 @@ SUCCESS_LIST=""
 FAILED_LIST=""
 RESTORED_LIST=""
 
+# Basic dependency check before doing anything destructive.
+for command in "$MIDCLT" "$JQ"; do
+    if [ ! -x "$command" ]; then
+        echo "ERROR: Required command not found or not executable: $command" >&2
+        exit 1
+    fi
+done
+
 START_TIME=$(date '+%Y-%m-%d %H:%M:%S')
+
+# The normal use case is a nightly run before a maintenance reboot.  The
+# deadline is the next occurrence of UPDATE_DEADLINE, normally tomorrow.
 DEADLINE=$(date -d "tomorrow ${UPDATE_DEADLINE}" +%s)
 
 log() {
@@ -40,7 +52,12 @@ log() {
 append_line() {
     local var_name="$1"
     local line="$2"
-    printf -v "$var_name" '%s\n%s' "${!var_name}" "$line"
+
+    if [ -n "${!var_name}" ]; then
+        printf -v "$var_name" '%s\n%s' "${!var_name}" "$line"
+    else
+        printf -v "$var_name" '%s' "$line"
+    fi
 }
 
 send_report() {
@@ -132,6 +149,14 @@ while read -r APP; do
     LATEST_VERSION=$(echo "$APP_INFO" | "$JQ" -r '.latest_version')
 
     log "$APP state=$ORIGINAL_STATE version=$OLD_VERSION latest=$LATEST_VERSION"
+
+    # Only RUNNING and STOPPED are safe/expected states for this workflow.
+    # Do not try to manipulate an App in a transitional/error state.
+    if [ "$ORIGINAL_STATE" != "RUNNING" ] && [ "$ORIGINAL_STATE" != "STOPPED" ]; then
+        log "SKIPPED: $APP is in unsupported state $ORIGINAL_STATE"
+        append_line FAILED_LIST "SKIPPED: $APP - Unsupported state: $ORIGINAL_STATE"
+        continue
+    fi
 
     # Temporarily start a stopped App.
     if [ "$ORIGINAL_STATE" = "STOPPED" ]; then
